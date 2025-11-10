@@ -104,6 +104,15 @@ class GenieClient:
             st.warning(f"Could not fetch space info: {str(e)}")
             return None
 
+    def list_spaces(self):
+        """List all available Genie spaces"""
+        try:
+            spaces = list(self.client.genie.list_spaces())
+            return spaces
+        except Exception as e:
+            st.warning(f"Could not list spaces: {str(e)}")
+            return []
+
 
 def initialize_session_state():
     """Initialize Streamlit session state"""
@@ -116,7 +125,7 @@ def initialize_session_state():
 
 
 def format_genie_response(response: GenieMessage) -> str:
-    """Format Genie response for display"""
+    """Format Genie response for display with enhanced details"""
     if not response:
         return "No response received from Genie."
 
@@ -124,20 +133,30 @@ def format_genie_response(response: GenieMessage) -> str:
 
     # Process attachments
     if response.attachments:
-        for attachment in response.attachments:
+        for i, attachment in enumerate(response.attachments, 1):
+            # Natural language response
             if attachment.text and attachment.text.content:
                 formatted_text += attachment.text.content + "\n\n"
 
-            # If there's a query, show it
-            if attachment.query and attachment.query.query:
-                formatted_text += "**Generated SQL:**\n```sql\n"
-                formatted_text += attachment.query.query + "\n```\n\n"
+            # Query information
+            if attachment.query:
+                # Query description (what the SQL does)
+                if hasattr(attachment.query, 'description') and attachment.query.description:
+                    formatted_text += f"**Query Description:** {attachment.query.description}\n\n"
 
-            # If there's a query result, show it
-            if attachment.query and attachment.query.result:
-                result = attachment.query.result
-                if result.row_count and result.row_count > 0:
-                    formatted_text += f"**Query returned {result.row_count} rows**\n"
+                # Generated SQL
+                if attachment.query.query:
+                    formatted_text += "**Generated SQL:**\n```sql\n"
+                    formatted_text += attachment.query.query + "\n```\n\n"
+
+            # Query result metadata
+            if hasattr(attachment, 'query_result_metadata') and attachment.query_result_metadata:
+                metadata = attachment.query_result_metadata
+                if hasattr(metadata, 'row_count') and metadata.row_count is not None:
+                    formatted_text += f"📊 **Results:** {metadata.row_count} row(s) returned"
+                    if hasattr(metadata, 'truncated') and metadata.truncated:
+                        formatted_text += " (truncated)"
+                    formatted_text += "\n\n"
 
     return formatted_text if formatted_text else "Genie processed your query."
 
@@ -192,6 +211,31 @@ def display_sidebar():
                 return example
 
         st.divider()
+
+        # API Information
+        with st.expander("🔌 API Info"):
+            st.markdown("""
+            **APIs Used:**
+
+            This app uses the following Genie APIs:
+
+            **Core Operations:**
+            - `start_conversation_and_wait()` - Start new chat
+            - `create_message_and_wait()` - Send questions
+            - `get_space()` - Get space info
+
+            **What you get in responses:**
+            - ✅ Natural language answers
+            - ✅ Generated SQL queries
+            - ✅ Query descriptions
+            - ✅ Row count metadata
+
+            **Note:** The `_and_wait()` methods automatically
+            handle polling and return complete responses with
+            all data including SQL!
+
+            See `GENIE_API_REFERENCE.md` for complete API docs.
+            """)
 
         # About
         with st.expander("ℹ️ About"):
