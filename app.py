@@ -147,19 +147,51 @@ def format_genie_response(response: GenieMessage, show_debug: bool = False) -> s
 
     formatted_text = ""
 
+    # Debug mode - show complete response structure
+    if show_debug:
+        formatted_text += "**🔍 DEBUG - Complete Response Structure:**\n\n"
+
+        # Response-level fields
+        formatted_text += "**Message Fields:**\n"
+        formatted_text += f"- id: {response.id if hasattr(response, 'id') else 'N/A'}\n"
+        formatted_text += f"- conversation_id: {response.conversation_id if hasattr(response, 'conversation_id') else 'N/A'}\n"
+        formatted_text += f"- status: {response.status if hasattr(response, 'status') else 'N/A'}\n"
+        formatted_text += f"- created_timestamp: {response.created_timestamp if hasattr(response, 'created_timestamp') else 'N/A'}\n"
+        formatted_text += f"- last_updated_timestamp: {response.last_updated_timestamp if hasattr(response, 'last_updated_timestamp') else 'N/A'}\n"
+        formatted_text += f"- user_id: {response.user_id if hasattr(response, 'user_id') else 'N/A'}\n"
+        formatted_text += f"- error: {response.error if hasattr(response, 'error') and response.error else 'None'}\n"
+        formatted_text += f"- feedback: {response.feedback if hasattr(response, 'feedback') and response.feedback else 'None'}\n"
+        formatted_text += "\n"
+
     # Process attachments
     if response.attachments:
         for i, attachment in enumerate(response.attachments, 1):
-            # Debug mode - show raw attachment structure
+            # Debug mode - show attachment details
             if show_debug:
-                formatted_text += "**🔍 DEBUG - Raw Attachment Data:**\n"
+                formatted_text += f"**Attachment {i} Fields:**\n"
+                formatted_text += f"- id: {attachment.id if hasattr(attachment, 'id') else 'N/A'}\n"
                 formatted_text += f"- Has text: {hasattr(attachment, 'text') and attachment.text is not None}\n"
                 formatted_text += f"- Has query: {hasattr(attachment, 'query') and attachment.query is not None}\n"
-                if hasattr(attachment.query, 'description'):
-                    formatted_text += f"- Query description exists: {attachment.query.description is not None}\n"
-                    if attachment.query.description:
-                        formatted_text += f"- Query description value: '{attachment.query.description}'\n"
-                formatted_text += "\n"
+                formatted_text += f"- Has suggested_questions: {hasattr(attachment, 'suggested_questions') and attachment.suggested_questions is not None}\n"
+                formatted_text += f"- Has query_result_metadata: {hasattr(attachment, 'query_result_metadata') and attachment.query_result_metadata is not None}\n"
+
+                if hasattr(attachment, 'query') and attachment.query:
+                    formatted_text += f"\n**Query Fields:**\n"
+                    formatted_text += f"- title: {attachment.query.title if hasattr(attachment.query, 'title') else 'N/A'}\n"
+                    formatted_text += f"- description: {attachment.query.description if hasattr(attachment.query, 'description') else 'N/A'}\n"
+                    formatted_text += f"- statement_id: {attachment.query.statement_id if hasattr(attachment.query, 'statement_id') else 'N/A'}\n"
+                    formatted_text += f"- last_updated_timestamp: {attachment.query.last_updated_timestamp if hasattr(attachment.query, 'last_updated_timestamp') else 'N/A'}\n"
+
+                if hasattr(attachment, 'suggested_questions') and attachment.suggested_questions:
+                    formatted_text += f"\n**Suggested Questions Available:** Yes\n"
+
+                if hasattr(attachment, 'query_result_metadata') and attachment.query_result_metadata:
+                    metadata = attachment.query_result_metadata
+                    formatted_text += f"\n**Query Result Metadata:**\n"
+                    formatted_text += f"- row_count: {metadata.row_count if hasattr(metadata, 'row_count') else 'N/A'}\n"
+                    formatted_text += f"- truncated: {metadata.truncated if hasattr(metadata, 'truncated') else 'N/A'}\n"
+
+                formatted_text += "\n---\n\n"
 
             # Natural language response
             if attachment.text and attachment.text.content:
