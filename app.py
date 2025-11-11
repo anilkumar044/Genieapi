@@ -24,6 +24,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Log startup
+LOG_FILE_PATH = os.path.abspath('genie_app.log')
+logger.info("="*80)
+logger.info("🚀 Genie Chat App Starting...")
+logger.info(f"📝 Log file: {LOG_FILE_PATH}")
+logger.info("="*80)
+
 # Load environment variables
 load_dotenv()
 
@@ -460,6 +467,29 @@ def display_sidebar():
             value=st.session_state.debug_mode,
             help="Show raw API response data for troubleshooting"
         )
+
+        st.divider()
+
+        # Logging info
+        st.subheader("📋 Logging")
+        st.text(f"Log file location:")
+        st.code(LOG_FILE_PATH, language=None)
+
+        # Show recent logs
+        if os.path.exists(LOG_FILE_PATH):
+            file_size = os.path.getsize(LOG_FILE_PATH)
+            st.text(f"Size: {file_size:,} bytes")
+
+            if st.button("📖 View Recent Logs", use_container_width=True):
+                try:
+                    with open(LOG_FILE_PATH, 'r') as f:
+                        lines = f.readlines()
+                        recent_lines = lines[-50:]  # Last 50 lines
+                    st.text_area("Recent Logs", "".join(recent_lines), height=300)
+                except Exception as e:
+                    st.error(f"Error reading logs: {e}")
+        else:
+            st.text("No logs yet - ask a query!")
 
         st.divider()
 
