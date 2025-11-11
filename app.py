@@ -138,6 +138,8 @@ def initialize_session_state():
         st.session_state.genie_client = None
     if 'debug_mode' not in st.session_state:
         st.session_state.debug_mode = False
+    if 'cached_credentials' not in st.session_state:
+        st.session_state.cached_credentials = None
 
 
 def format_genie_response(response: GenieMessage, show_debug: bool = False) -> str:
@@ -316,6 +318,13 @@ def display_sidebar():
         else:
             st.error("❌ Not connected")
 
+        # Reload configuration button
+        if st.button("🔄 Reload Configuration", use_container_width=True, help="Reload .env file and reconnect"):
+            # Clear cached credentials to force reconnection
+            st.session_state.cached_credentials = None
+            st.session_state.genie_client = None
+            st.rerun()
+
         st.divider()
 
         # Conversation controls
@@ -416,6 +425,9 @@ def main():
     # Initialize session state
     initialize_session_state()
 
+    # Reload .env file to pick up any changes (override=True ensures fresh load)
+    load_dotenv(override=True)
+
     # App header
     st.title("🧞 Databricks Genie Chat Assistant")
     st.markdown("*Ask questions about your data in natural language*")
@@ -438,7 +450,17 @@ def main():
         """)
         st.stop()
 
-    # Initialize Genie client (only once)
+    # Create credential hash for change detection
+    current_credentials = f"{host}:{token}:{space_id}"
+
+    # Check if credentials changed - if so, recreate client
+    if st.session_state.cached_credentials != current_credentials:
+        if st.session_state.genie_client is not None:
+            st.info("🔄 Credentials changed - reconnecting...")
+        st.session_state.genie_client = None
+        st.session_state.cached_credentials = current_credentials
+
+    # Initialize Genie client (only once, or when credentials change)
     if st.session_state.genie_client is None:
         st.session_state.genie_client = GenieClient(host, token, space_id)
 
