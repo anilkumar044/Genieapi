@@ -140,6 +140,8 @@ def initialize_session_state():
         st.session_state.debug_mode = False
     if 'cached_credentials' not in st.session_state:
         st.session_state.cached_credentials = None
+    if 'next_query' not in st.session_state:
+        st.session_state.next_query = None
 
 
 def format_genie_response(response: GenieMessage, show_debug: bool = False) -> str:
@@ -201,6 +203,10 @@ def format_genie_response(response: GenieMessage, show_debug: bool = False) -> s
 
             # Query information
             if attachment.query:
+                # Query Title (if present) - short descriptive name
+                if hasattr(attachment.query, 'title') and attachment.query.title:
+                    formatted_text += f"### {attachment.query.title}\n\n"
+
                 # Query description - helpful context about what the SQL does
                 # Note: Databricks UI doesn't show this, but it's useful!
                 if hasattr(attachment.query, 'description') and attachment.query.description:
@@ -220,15 +226,55 @@ def format_genie_response(response: GenieMessage, show_debug: bool = False) -> s
                         formatted_text += " (truncated)"
                     formatted_text += "\n\n"
 
+    # Calculate and display response time
+    if hasattr(response, 'created_timestamp') and hasattr(response, 'last_updated_timestamp'):
+        if response.created_timestamp and response.last_updated_timestamp:
+            duration = (response.last_updated_timestamp - response.created_timestamp) / 1000.0
+            formatted_text += f"⏱️ **Response time:** {duration:.1f} seconds\n\n"
+
     return formatted_text if formatted_text else "Genie processed your query."
 
 
+def display_suggested_questions(attachment):
+    """Display suggested follow-up questions as clickable buttons"""
+    if hasattr(attachment, 'suggested_questions') and attachment.suggested_questions:
+        # Check if suggested_questions has a questions attribute (list)
+        questions = None
+        if hasattr(attachment.suggested_questions, 'questions'):
+            questions = attachment.suggested_questions.questions
+        elif isinstance(attachment.suggested_questions, list):
+            questions = attachment.suggested_questions
+
+        if questions and len(questions) > 0:
+            st.markdown("### 💡 Suggested follow-up questions:")
+
+            # Display as buttons in columns
+            cols = st.columns(min(len(questions), 3))
+            for idx, question in enumerate(questions[:6]):  # Limit to 6 questions
+                col_idx = idx % 3
+                with cols[col_idx]:
+                    # Extract question text
+                    question_text = question
+                    if hasattr(question, 'question'):
+                        question_text = question.question
+                    elif hasattr(question, 'text'):
+                        question_text = question.text
+
+                    # Create button for each question
+                    if st.button(f"🔍 {question_text}", key=f"suggested_{idx}_{question_text[:20]}", use_container_width=True):
+                        # Store in session state to be processed
+                        st.session_state.next_query = question_text
+                        st.rerun()
+
+
 def display_query_results(genie_client, response: GenieMessage):
-    """Fetch and display actual query result data as tables"""
+    """Fetch and display actual query result data as tables and suggested questions"""
     if not response or not response.attachments:
         return
 
     for attachment in response.attachments:
+        # Display suggested follow-up questions first
+        display_suggested_questions(attachment)
         # Check if there's a query with results to fetch
         if attachment.query and hasattr(attachment, 'id'):
             attachment_id = attachment.id
@@ -281,6 +327,20 @@ def display_query_results(genie_client, response: GenieMessage):
                                         else:
                                             row_values.append(str(value))
                                     rows.append(row_values)
+
+                        # Display pagination info before table
+                        if hasattr(statement_response, 'manifest') and statement_response.manifest:
+                            manifest = statement_response.manifest
+                            if hasattr(manifest, 'total_row_count') and manifest.total_row_count is not None:
+                                rows_shown = len(rows)
+                                total_rows = manifest.total_row_count
+                                is_truncated = hasattr(manifest, 'truncated') and manifest.truncated
+
+                                if total_rows > rows_shown or is_truncated:
+                                    st.info(f"📊 Showing {rows_shown:,} of {total_rows:,} total rows" +
+                                           (" (results truncated)" if is_truncated else ""))
+                                elif total_rows > 0:
+                                    st.success(f"📊 Showing all {total_rows:,} rows")
 
                         # Create and display DataFrame
                         if rows and columns:
@@ -479,6 +539,11 @@ def main():
     if example_query:
         user_query = example_query
 
+    # Use suggested question if clicked
+    if st.session_state.next_query:
+        user_query = st.session_state.next_query
+        st.session_state.next_query = None  # Clear it
+
     # Process user input
     if user_query:
         # Add user message to chat
@@ -503,16 +568,45 @@ def main():
 
         # Display response
         if response:
-            formatted_response = format_genie_response(response, show_debug=st.session_state.debug_mode)
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": formatted_response
-            })
-            with st.chat_message("assistant"):
-                st.markdown(formatted_response)
+            # Check for errors in the response
+            if hasattr(response, 'error') and response.error:
+                # Display detailed error message
+                error_detail = response.error
+                error_msg = "❌ **Query Failed**\n\n"
 
-                # Fetch and display actual query result data
-                display_query_results(genie_client, response)
+                if hasattr(error_detail, 'message'):
+                    error_msg += f"**Error:** {error_detail.message}\n\n"
+                elif isinstance(error_detail, str):
+                    error_msg += f"**Error:** {error_detail}\n\n"
+                else:
+                    error_msg += f"**Error:** {str(error_detail)}\n\n"
+
+                if hasattr(error_detail, 'error_code'):
+                    error_msg += f"**Error Code:** {error_detail.error_code}\n\n"
+
+                error_msg += "💡 **Suggestions:**\n"
+                error_msg += "- Check your table/column names\n"
+                error_msg += "- Verify your permissions\n"
+                error_msg += "- Try rephrasing your question\n"
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_msg
+                })
+                with st.chat_message("assistant"):
+                    st.error(error_msg)
+            else:
+                # Normal successful response
+                formatted_response = format_genie_response(response, show_debug=st.session_state.debug_mode)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": formatted_response
+                })
+                with st.chat_message("assistant"):
+                    st.markdown(formatted_response)
+
+                    # Fetch and display actual query result data
+                    display_query_results(genie_client, response)
         else:
             error_msg = "❌ Failed to get response from Genie. Please try again."
             st.session_state.messages.append({
