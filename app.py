@@ -5,11 +5,24 @@ A simple Streamlit app to interact with Databricks Genie API
 
 import os
 import time
+import logging
+import json
 from typing import Optional
 from dotenv import load_dotenv
 import streamlit as st
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.dashboards import GenieMessage
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('genie_app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -148,6 +161,41 @@ def format_genie_response(response: GenieMessage, show_debug: bool = False) -> s
     """Format Genie response for display with enhanced details"""
     if not response:
         return "No response received from Genie."
+
+    # LOG: Capture complete response structure
+    logger.info("="*80)
+    logger.info("GENIE API RESPONSE - Field Analysis")
+    logger.info("="*80)
+    logger.info(f"Response ID: {response.id if hasattr(response, 'id') else 'N/A'}")
+    logger.info(f"Status: {response.status if hasattr(response, 'status') else 'N/A'}")
+    logger.info(f"Has error: {hasattr(response, 'error') and response.error is not None}")
+    logger.info(f"Timestamps - created: {response.created_timestamp if hasattr(response, 'created_timestamp') else 'N/A'}, updated: {response.last_updated_timestamp if hasattr(response, 'last_updated_timestamp') else 'N/A'}")
+
+    if response.attachments:
+        logger.info(f"Number of attachments: {len(response.attachments)}")
+        for idx, att in enumerate(response.attachments):
+            logger.info(f"--- Attachment {idx+1} ---")
+            logger.info(f"  Has text: {hasattr(att, 'text') and att.text is not None}")
+            logger.info(f"  Has query: {hasattr(att, 'query') and att.query is not None}")
+            logger.info(f"  Has suggested_questions: {hasattr(att, 'suggested_questions') and att.suggested_questions is not None}")
+            logger.info(f"  Has query_result_metadata: {hasattr(att, 'query_result_metadata') and att.query_result_metadata is not None}")
+
+            if hasattr(att, 'query') and att.query:
+                logger.info(f"  Query.title: {'EXISTS - ' + str(att.query.title)[:50] if hasattr(att.query, 'title') and att.query.title else 'MISSING/NULL'}")
+                logger.info(f"  Query.description: {'EXISTS - ' + str(att.query.description)[:50] if hasattr(att.query, 'description') and att.query.description else 'MISSING/NULL'}")
+                logger.info(f"  Query.statement_id: {'EXISTS' if hasattr(att.query, 'statement_id') and att.query.statement_id else 'MISSING/NULL'}")
+
+            if hasattr(att, 'suggested_questions') and att.suggested_questions:
+                sq = att.suggested_questions
+                logger.info(f"  Suggested questions type: {type(sq).__name__}")
+                if hasattr(sq, 'questions'):
+                    logger.info(f"  Suggested questions count: {len(sq.questions) if sq.questions else 0}")
+                elif isinstance(sq, list):
+                    logger.info(f"  Suggested questions count: {len(sq)}")
+    else:
+        logger.info("No attachments in response")
+
+    logger.info("="*80)
 
     formatted_text = ""
 
