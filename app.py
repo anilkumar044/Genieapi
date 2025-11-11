@@ -113,6 +113,20 @@ class GenieClient:
             st.warning(f"Could not list spaces: {str(e)}")
             return []
 
+    def get_query_result(self, conversation_id: str, message_id: str, attachment_id: str):
+        """Fetch actual query result data (the rows)"""
+        try:
+            result = self.client.genie.get_message_query_result(
+                space_id=self.space_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                attachment_id=attachment_id
+            )
+            return result
+        except Exception as e:
+            st.warning(f"Could not fetch query results: {str(e)}")
+            return None
+
 
 def initialize_session_state():
     """Initialize Streamlit session state"""
@@ -159,6 +173,85 @@ def format_genie_response(response: GenieMessage) -> str:
                     formatted_text += "\n\n"
 
     return formatted_text if formatted_text else "Genie processed your query."
+
+
+def display_query_results(genie_client, response: GenieMessage):
+    """Fetch and display actual query result data as tables"""
+    if not response or not response.attachments:
+        return
+
+    for attachment in response.attachments:
+        # Check if there's a query with results to fetch
+        if attachment.query and hasattr(attachment, 'id'):
+            attachment_id = attachment.id
+
+            # Fetch the actual data
+            result = genie_client.get_query_result(
+                conversation_id=response.conversation_id,
+                message_id=response.id,
+                attachment_id=attachment_id
+            )
+
+            if result and hasattr(result, 'statement_response'):
+                statement_response = result.statement_response
+
+                # Check if we have data
+                if hasattr(statement_response, 'result') and statement_response.result:
+                    result_data = statement_response.result
+
+                    # Try to convert to pandas DataFrame for display
+                    try:
+                        import pandas as pd
+
+                        # Get schema (column names)
+                        columns = []
+                        if hasattr(statement_response, 'manifest') and statement_response.manifest:
+                            manifest = statement_response.manifest
+                            if hasattr(manifest, 'schema') and manifest.schema:
+                                schema = manifest.schema
+                                if hasattr(schema, 'columns'):
+                                    columns = [col.name for col in schema.columns]
+
+                        # Get data rows
+                        rows = []
+                        if hasattr(result_data, 'data_typed_array'):
+                            for row in result_data.data_typed_array:
+                                if hasattr(row, 'values'):
+                                    row_values = []
+                                    for value in row.values:
+                                        # Extract the actual value from typed data
+                                        if hasattr(value, 'str'):
+                                            row_values.append(value.str)
+                                        elif hasattr(value, 'int'):
+                                            row_values.append(value.int)
+                                        elif hasattr(value, 'long'):
+                                            row_values.append(value.long)
+                                        elif hasattr(value, 'double'):
+                                            row_values.append(value.double)
+                                        elif hasattr(value, 'bool'):
+                                            row_values.append(value.bool)
+                                        else:
+                                            row_values.append(str(value))
+                                    rows.append(row_values)
+
+                        # Create and display DataFrame
+                        if rows and columns:
+                            df = pd.DataFrame(rows, columns=columns)
+                            st.dataframe(df, use_container_width=True)
+                        elif rows:
+                            # If no column names, just show the data
+                            df = pd.DataFrame(rows)
+                            st.dataframe(df, use_container_width=True)
+                        else:
+                            st.info("Query executed successfully but returned no data to display.")
+
+                    except ImportError:
+                        st.warning("pandas not installed. Install with: pip install pandas")
+                    except Exception as e:
+                        st.warning(f"Could not display data table: {str(e)}")
+                        # Show raw result for debugging
+                        with st.expander("View raw result data"):
+                            st.json(result_data.as_dict() if hasattr(result_data, 'as_dict') else str(result_data))
 
 
 def display_sidebar():
@@ -337,6 +430,9 @@ def main():
             })
             with st.chat_message("assistant"):
                 st.markdown(formatted_response)
+
+                # Fetch and display actual query result data
+                display_query_results(genie_client, response)
         else:
             error_msg = "❌ Failed to get response from Genie. Please try again."
             st.session_state.messages.append({
