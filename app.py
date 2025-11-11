@@ -136,9 +136,11 @@ def initialize_session_state():
         st.session_state.messages = []
     if 'genie_client' not in st.session_state:
         st.session_state.genie_client = None
+    if 'debug_mode' not in st.session_state:
+        st.session_state.debug_mode = False
 
 
-def format_genie_response(response: GenieMessage) -> str:
+def format_genie_response(response: GenieMessage, show_debug: bool = False) -> str:
     """Format Genie response for display with enhanced details"""
     if not response:
         return "No response received from Genie."
@@ -148,15 +150,27 @@ def format_genie_response(response: GenieMessage) -> str:
     # Process attachments
     if response.attachments:
         for i, attachment in enumerate(response.attachments, 1):
+            # Debug mode - show raw attachment structure
+            if show_debug:
+                formatted_text += "**🔍 DEBUG - Raw Attachment Data:**\n"
+                formatted_text += f"- Has text: {hasattr(attachment, 'text') and attachment.text is not None}\n"
+                formatted_text += f"- Has query: {hasattr(attachment, 'query') and attachment.query is not None}\n"
+                if hasattr(attachment.query, 'description'):
+                    formatted_text += f"- Query description exists: {attachment.query.description is not None}\n"
+                    if attachment.query.description:
+                        formatted_text += f"- Query description value: '{attachment.query.description}'\n"
+                formatted_text += "\n"
+
             # Natural language response
             if attachment.text and attachment.text.content:
                 formatted_text += attachment.text.content + "\n\n"
 
             # Query information
             if attachment.query:
-                # Query description (what the SQL does)
-                if hasattr(attachment.query, 'description') and attachment.query.description:
-                    formatted_text += f"**Query Description:** {attachment.query.description}\n\n"
+                # Query description - COMMENTED OUT to match Databricks UI behavior
+                # The API returns this field but Databricks UI doesn't display it
+                # if hasattr(attachment.query, 'description') and attachment.query.description:
+                #     formatted_text += f"**Query Description:** {attachment.query.description}\n\n"
 
                 # Generated SQL
                 if attachment.query.query:
@@ -287,6 +301,16 @@ def display_sidebar():
         if st.button("🗑️ Clear Chat History", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
+
+        st.divider()
+
+        # Debug mode toggle
+        st.subheader("🔧 Advanced")
+        st.session_state.debug_mode = st.checkbox(
+            "Debug Mode",
+            value=st.session_state.debug_mode,
+            help="Show raw API response data for troubleshooting"
+        )
 
         st.divider()
 
@@ -423,7 +447,7 @@ def main():
 
         # Display response
         if response:
-            formatted_response = format_genie_response(response)
+            formatted_response = format_genie_response(response, show_debug=st.session_state.debug_mode)
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": formatted_response
