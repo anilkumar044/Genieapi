@@ -167,10 +167,10 @@ def format_genie_response(response: GenieMessage, show_debug: bool = False) -> s
 
             # Query information
             if attachment.query:
-                # Query description - COMMENTED OUT to match Databricks UI behavior
-                # The API returns this field but Databricks UI doesn't display it
-                # if hasattr(attachment.query, 'description') and attachment.query.description:
-                #     formatted_text += f"**Query Description:** {attachment.query.description}\n\n"
+                # Query description - helpful context about what the SQL does
+                # Note: Databricks UI doesn't show this, but it's useful!
+                if hasattr(attachment.query, 'description') and attachment.query.description:
+                    formatted_text += f"**Query Description:** {attachment.query.description}\n\n"
 
                 # Generated SQL
                 if attachment.query.query:
@@ -339,13 +339,15 @@ def display_sidebar():
             **Core Operations:**
             - `start_conversation_and_wait()` - Start new chat
             - `create_message_and_wait()` - Send questions
+            - `get_message_query_result()` - Fetch result data
             - `get_space()` - Get space info
 
             **What you get in responses:**
             - ✅ Natural language answers
             - ✅ Generated SQL queries
-            - ✅ Query descriptions
+            - ✅ Query descriptions (bonus: not shown in Databricks UI!)
             - ✅ Row count metadata
+            - ✅ Actual data tables
 
             **Note:** The `_and_wait()` methods automatically
             handle polling and return complete responses with
