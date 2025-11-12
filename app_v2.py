@@ -170,7 +170,7 @@ def parse_query_result(result_data: Dict) -> Optional[pd.DataFrame]:
         columns = []
         schema = manifest.get("schema", {})
         if "columns" in schema:
-            columns = [col["name"] for col in schema["columns"]]
+            columns = [col.get("name", f"col_{i}") for i, col in enumerate(schema["columns"])]
 
         # Get data rows
         rows = []
@@ -247,12 +247,13 @@ def render_spaces_tab(client: GenieAPIClient):
             with col1:
                 st.subheader(f"📁 {space.get('name', 'Unnamed Space')}")
                 if space.get('description'):
-                    st.caption(space['description'])
-                st.caption(f"Space ID: `{space['id']}`")
+                    st.caption(space.get('description'))
+                st.caption(f"Space ID: `{space.get('id', 'unknown')}`")
 
             with col2:
-                if st.button("Select Space", key=f"select_{space['id']}"):
-                    st.session_state.current_space_id = space['id']
+                space_id = space.get('id', 'unknown')
+                if st.button("Select Space", key=f"select_{space_id}"):
+                    st.session_state.current_space_id = space_id
                     st.session_state.current_conversation_id = None
                     st.session_state.chat_history = []
                     st.success(f"Selected: {space.get('name')}")
@@ -326,21 +327,21 @@ def render_chat_tab(client: GenieAPIClient):
 
     # Display chat history
     for idx, msg in enumerate(st.session_state.chat_history):
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+        with st.chat_message(msg.get("role", "user")):
+            st.write(msg.get("content", ""))
 
             # If this is an assistant message with details, show additional info
-            if msg["role"] == "assistant" and msg.get("message_id"):
-                message_id = msg["message_id"]
+            if msg.get("role") == "assistant" and msg.get("message_id"):
+                message_id = msg.get("message_id")
                 details = st.session_state.message_details.get(message_id, {})
 
                 # Show query description
                 if details.get("description"):
-                    st.info(f"**Query Description:** {details['description']}")
+                    st.info(f"**Query Description:** {details.get('description')}")
 
                 # Show SQL
                 if details.get("sql"):
-                    st.code(details["sql"], language="sql")
+                    st.code(details.get("sql"), language="sql")
 
                 # Button to fetch/show query results
                 if details.get("attachment_id"):
@@ -353,7 +354,7 @@ def render_chat_tab(client: GenieAPIClient):
                                     space_id,
                                     st.session_state.current_conversation_id,
                                     message_id,
-                                    details["attachment_id"]
+                                    details.get("attachment_id")
                                 )
 
                                 if result_data:
@@ -411,7 +412,7 @@ def render_chat_tab(client: GenieAPIClient):
                 response = client.start_conversation(space_id, user_query)
 
                 if response and "conversation_id" in response:
-                    st.session_state.current_conversation_id = response["conversation_id"]
+                    st.session_state.current_conversation_id = response.get("conversation_id")
 
         # Process response
         if response:
@@ -442,7 +443,7 @@ def render_chat_tab(client: GenieAPIClient):
                     # Check for text content
                     text_content = attachment.get("text", {})
                     if text_content and text_content.get("content"):
-                        assistant_response = text_content["content"]
+                        assistant_response = text_content.get("content", assistant_response)
 
                 # Store details
                 st.session_state.message_details[message_id] = details
