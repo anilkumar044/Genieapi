@@ -14,25 +14,27 @@ struct BoardScreen: View {
 
     @Environment(BoardStore.self) private var store
     @Environment(\.openURL) private var openURL
+    @Environment(AccountStore.self) private var account
 
     @State private var viewport = Viewport()
     @State private var didLoadViewport = false
     @State private var canvasSize: CGSize = .zero
-    @State private var panBase: CGSize?
-    @State private var zoomBase: Viewport?
+    @State private var panBase: CGSize? = nil
+    @State private var zoomBase: Viewport? = nil
 
-    @State private var selection: UUID?
-    @State private var editingTextID: UUID?
-    @State private var dropTargetID: UUID?
+    @State private var selection: UUID? = nil
+    @State private var editingTextID: UUID? = nil
+    @State private var dropTargetID: UUID? = nil
     @State private var suppressTapsUntil = Date.distantPast
     @State private var placementNudge = 0
 
-    @State private var inkTarget: InkTarget?
+    @State private var inkTarget: InkTarget? = nil
     @State private var showPhotoPicker = false
-    @State private var photoItem: PhotosPickerItem?
+    @State private var photoItem: PhotosPickerItem? = nil
     @State private var showLinkPrompt = false
     @State private var linkDraft = ""
     @State private var confirmDeleteBoard = false
+    @State private var ai = BoardAIController()
 
     private let space = "board-canvas"
 
@@ -84,6 +86,40 @@ struct BoardScreen: View {
                     inkTarget = nil
                 }
             )
+        }
+        .overlay(alignment: .top) {
+            aiBanner
+                .animation(.snappy(duration: 0.25), value: ai.runningLabel)
+                .animation(.snappy(duration: 0.25), value: ai.organizeUndo == nil)
+        }
+        .sheet(item: $ai.sheet) { sheet in
+            Group {
+                switch sheet {
+                case .setup:
+                    AISetupView(onReady: ai.setupCompleted, onCancel: ai.setupCancelled)
+                        .interactiveDismissDisabled()
+                case .account:
+                    AIAccountView()
+                }
+            }
+            .environment(account)
+        }
+        .alert("Ask About This Board", isPresented: $ai.showAskPrompt) {
+            TextField("Your question", text: $ai.askDraft)
+            Button("Cancel", role: .cancel) { ai.askDraft = "" }
+            Button("Ask") {
+                let question = ai.askDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                ai.askDraft = ""
+                if !question.isEmpty { runAI(.ask, question: question) }
+            }
+        }
+        .alert("AI", isPresented: Binding(
+            get: { ai.errorMessage != nil },
+            set: { if !$0 { ai.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(ai.errorMessage ?? "")
         }
         .sensoryFeedback(.selection, trigger: selection)
         .sensoryFeedback(.impact(weight: .light), trigger: dropTargetID) { _, new in new != nil }
@@ -480,6 +516,92 @@ struct BoardScreen: View {
         }
     }
 
+    // MARK: - AI
+
+    private func runAI(_ action: AIAction, cardID: UUID? = nil, question: String? = nil) {
+        setEditing(nil)
+        ai.perform(action, cardID: cardID, question: question, boardID: boardID, store: store, account: account) { target in
+            reveal(target)
+        }
+    }
+
+    /// The AI action offered for a selected card, if any.
+    private func cardAIAction(for card: Card) -> (action: AIAction, title: String)? {
+        switch card.kind {
+        case .text where !card.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            return (.expand, "Expand with AI")
+        case .ink where card.drawing != nil:
+            return (.handwriting, "Read Handwriting")
+        case .image:
+            return (.photoNotes, "Photo to Notes")
+        default:
+            return nil
+        }
+    }
+
+    /// Brings AI results into view.
+    private func reveal(_ target: AIReveal) {
+        switch target {
+        case .wholeBoard:
+            selection = nil
+            zoomToFit()
+        case .card(let id):
+            guard let card = store.card(id, in: boardID), canvasSize.width > 0 else { return }
+            selection = id
+            let scale = viewport.scale.clamped(to: 0.6...1.5)
+            withAnimation(.snappy) {
+                viewport = Viewport(
+                    offset: CGSize(
+                        width: canvasSize.width / 2 - card.center.x * scale,
+                        height: canvasSize.height * 0.42 - card.center.y * scale
+                    ),
+                    scale: scale
+                )
+            }
+            persistViewport()
+        }
+    }
+
+    @ViewBuilder
+    private var aiBanner: some View {
+        if let label = ai.runningLabel {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(label)
+                    .font(.subheadline.weight(.medium))
+                Button("Cancel") { ai.cancel() }
+                    .font(.subheadline)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        } else if ai.organizeUndo?.boardID == boardID {
+            HStack(spacing: 12) {
+                Label("Board organized", systemImage: "sparkles")
+                    .font(.subheadline.weight(.medium))
+                Button("Undo") { ai.undoOrganize(store: store) }
+                    .font(.subheadline.weight(.semibold))
+                Button {
+                    ai.dismissUndo()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     // MARK: - Toolbars
 
     private var titleBinding: Binding<String> {
@@ -491,6 +613,19 @@ struct BoardScreen: View {
 
     @ToolbarContentBuilder
     private var topToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button("Summarize Board", systemImage: "text.redaction") { runAI(.summarize) }
+                Button("Organize Board", systemImage: "rectangle.3.group") { runAI(.organize) }
+                Button("Ask About Board…", systemImage: "questionmark.bubble") { ai.showAskPrompt = true }
+                Divider()
+                Button("AI Account", systemImage: "person.crop.circle") { ai.sheet = .account }
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .disabled(ai.isRunning)
+            .accessibilityLabel("AI")
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Button("Zoom to Fit", systemImage: "arrow.up.left.and.down.right.magnifyingglass") { zoomToFit() }
@@ -554,6 +689,10 @@ struct BoardScreen: View {
             }
         case .image:
             EmptyView()
+        }
+        if let aiAction = cardAIAction(for: card) {
+            ToolButton(aiAction.title, systemImage: "sparkles") { runAI(aiAction.action, cardID: card.id) }
+                .disabled(ai.isRunning)
         }
         if card.kind != .image {
             Menu {

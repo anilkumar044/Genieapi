@@ -15,13 +15,21 @@ canvas where you spread out notes, sketches, photos and links, and nest boards i
   - **Links**: typed or pasted; the page title is fetched automatically. Tap a selected link to open it.
   - **Paste**: images, URLs or text from the clipboard become the right kind of card.
 - **Arrange** — drag to move, drag the corner dot to resize (photos keep their aspect ratio), long-press to select, recolor, duplicate (deep-copies nested boards), delete.
-- **Offline & private** — everything is stored locally in the app's Documents folder (`library.json` + `Images/`).
+- **Offline & private** — boards are stored locally in the app's Documents folder (`library.json` + `Images/`).
+- **AI actions (optional, runs on AWS)** — powered by Claude on Amazon Bedrock through the backend in [`backend/`](backend/README.md):
+  - ✨ menu on any board: **Summarize Board**, **Organize Board** (groups cards into titled columns, with Undo), **Ask About Board**
+  - ✨ on a selected card: **Expand with AI** (notes), **Read Handwriting** (sketches), **Photo to Notes** (photos)
+  - Results arrive as new cards on the canvas. The AI runs on AWS, not on the phone, and only the current board is sent,
+    only when you tap an action.
 
 ## Requirements
 
 - A Mac with **Xcode 16** or newer
 - An iPhone (or iPad) on **iOS 18** or newer
-- An Apple ID (a free one works for installing on your own device)
+- An **Apple Developer Program** membership. The app uses Sign in with Apple for its AI features, and that
+  capability isn't available to free Apple IDs. (To try the app on a free Apple ID without AI, delete
+  `Musing.entitlements` and the `CODE_SIGN_ENTITLEMENTS` build setting.)
+- For AI features: an AWS account with Amazon Bedrock. See [`backend/README.md`](backend/README.md)
 
 ## Run it on your iPhone
 
@@ -33,10 +41,24 @@ canvas where you spread out notes, sketches, photos and links, and nest boards i
 4. First time only: on the iPhone, enable **Settings → Privacy & Security → Developer Mode**, and trust your
    developer certificate under **Settings → General → VPN & Device Management**.
 
-> With a free Apple ID, apps installed this way expire after 7 days — just run it from Xcode again.
-> A paid Apple Developer account removes that limit and lets you distribute via TestFlight.
+You can also press ⌘R with an iPhone simulator selected to try it without a device. To test Sign in with Apple
+there, sign in to an Apple ID in the simulator's Settings app.
 
-You can also press ⌘R with an iPhone simulator selected to try it without a device.
+### Turn on AI features
+
+1. Deploy the backend: follow [`backend/README.md`](backend/README.md) (`npx cdk deploy -c bundleId=<your bundle ID>`).
+2. Paste the `ApiUrl` output into `Musing/AI/AIConfig.swift`.
+3. Run the app and tap ✨. The first time, Musing explains what gets shared, asks permission, and asks you to
+   Sign in with Apple.
+
+### App Store readiness (already handled)
+
+- **Consent before sharing** (guideline 5.1.2): the setup screen says exactly what is sent and to whom
+  (Anthropic's Claude on Amazon Bedrock), and nothing is sent without permission. The permission can be turned
+  off in **✨ → AI Account**.
+- **Account deletion** (5.1.1(v)): **AI Account → Delete Account** removes the server-side account and revokes Sign in with Apple.
+- **Privacy manifest**: `PrivacyInfo.xcprivacy` declares the user ID and the content sent for app functionality.
+  Match these in App Store Connect's privacy labels.
 
 ## Project layout
 
@@ -45,13 +67,21 @@ Musing/
 ├── Musing.xcodeproj
 └── Musing/
     ├── MusingApp.swift          App entry point, saves when backgrounded
+    ├── AI/AIConfig.swift        Backend URL (paste after deploying)
+    ├── AI/MusingAPI.swift       HTTP client + request/result types for the backend
+    ├── AI/AccountStore.swift    Sign in with Apple session, consent, usage
+    ├── AI/BoardAIController.swift  Builds AI requests from a board and turns results into cards
+    ├── Views/AIViews.swift      AI setup (consent + sign-in) and AI Account screens
     ├── Model/Models.swift       Card, Board, Viewport, Library (Codable)
     ├── Store/BoardStore.swift   Observable store: CRUD, move/duplicate, persistence, image & ink caches
     ├── Views/RootView.swift     NavigationStack of boards with zoom transitions
     ├── Views/BoardScreen.swift  The canvas: pan/zoom, selection, drag-to-file, toolbars
     ├── Views/CardView.swift     Card rendering (note, ink, photo, link, board) + gestures
     ├── Views/InkEditor.swift    PencilKit sketchpad
-    └── Assets.xcassets          App icon and accent color
+    ├── Assets.xcassets          App icon and accent color
+    ├── Musing.entitlements      Sign in with Apple
+    └── PrivacyInfo.xcprivacy    Privacy manifest
+backend/                         AWS CDK app: Lambda + DynamoDB + Claude on Amazon Bedrock
 ```
 
 The Xcode project uses folder-synchronized groups, so any Swift file you add under `Musing/Musing/`

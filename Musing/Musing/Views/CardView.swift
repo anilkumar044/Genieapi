@@ -31,8 +31,8 @@ struct CardView: View {
     var onResize: (CGSize) -> Void
     var onResizeEnded: () -> Void
 
-    @State private var dragStart: CGPoint?
-    @State private var resizeStart: CGSize?
+    @State private var dragStart: CGPoint? = nil
+    @State private var resizeStart: CGSize? = nil
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 10, style: .continuous) }
     /// While editing text, let the text view get touches instead of our gestures.
