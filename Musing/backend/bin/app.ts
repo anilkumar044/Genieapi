@@ -19,7 +19,7 @@ new MusingStack(app, "MusingBackend", {
   fallbackModelId: context("fallbackModelId") ?? "",
   bedrockRegion: context("bedrockRegion"),
   effort: context("effort") ?? "",
-  dailyLimit: Number(context("dailyLimit") ?? 50),
+  dailyLimit: Number(context("dailyLimit") ?? 150),
   appleKeySecretName: context("appleKeySecretName"),
   maxConcurrency: maxConcurrency ? Number(maxConcurrency) : undefined,
 });

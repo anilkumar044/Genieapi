@@ -5,6 +5,7 @@
   "description": "AWS backend for the Musing iOS app: Sign in with Apple sessions, per-user limits, and Claude on Amazon Bedrock.",
   "type": "module",
   "scripts": {
+    "dev": "tsx scripts/dev-server.ts",
     "build": "tsc --noEmit",
     "test": "vitest run",
     "check:mock-bedrock": "tsx scripts/mock-bedrock-check.ts",

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Musing checks your calendar and adds events you approve.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Musing checks your reminders and adds or completes the ones you approve.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Musing looks up phone numbers and email addresses when you ask it to contact someone.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Lets Debug builds reach the local dev server (http://localhost:8787). -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

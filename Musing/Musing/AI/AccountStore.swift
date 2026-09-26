@@ -1,7 +1,7 @@
 import AuthenticationServices
 import Foundation
 
-/// The person's AI account: Sign in with Apple session, consent to share content, and daily usage.
+/// The person's account: Sign in with Apple session, consent to share content with the AI, and daily usage.
 @MainActor
 @Observable
 final class AccountStore {
@@ -68,17 +68,26 @@ final class AccountStore {
         }
     }
 
-    func run(_ request: AIRequest) async throws -> AIResult {
+    /// Sends the conversation to Claude for its next step.
+    func agentTurn(messages: [WireMessage], tools: [String]) async throws -> AgentReply {
         guard let api else { throw APIError.notConfigured }
         guard let token = sessionToken else { throw APIError.unauthorized }
         do {
-            let response = try await api.run(request, token: token)
-            usage = response.usage
-            return response.result
+            let reply = try await api.agentTurn(messages: messages, tools: tools, token: token)
+            usage = reply.usage
+            return reply
         } catch APIError.unauthorized {
             signOut()
             throw APIError.unauthorized
         }
+    }
+
+    /// Signs in to the local dev server without Apple (Debug builds only).
+    func devSignIn() async throws {
+        guard let api else { throw APIError.notConfigured }
+        let response = try await api.devSignIn()
+        setSession(response.sessionToken)
+        await refreshUsage()
     }
 
     /// Signs out if the person revoked Musing's access in Settings → Apple ID.

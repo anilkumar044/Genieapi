@@ -13,7 +13,7 @@ export interface Config {
   /** Model to retry on when the main model declines a request. Empty to disable. */
   fallbackModelId?: string;
   bedrockRegion: string;
-  /** AI actions each user may run per UTC day. */
+  /** Assistant steps (model calls) each user may run per UTC day. */
   dailyLimit: number;
   /** Reasoning effort; omitted from requests when unset (e.g. for Haiku). */
   effort?: Effort;
@@ -30,7 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (effort && !(EFFORTS as readonly string[]).includes(effort)) {
     throw new Error(`EFFORT must be one of ${EFFORTS.join(", ")}`);
   }
-  const dailyLimit = Number(env.DAILY_LIMIT ?? "50");
+  const dailyLimit = Number(env.DAILY_LIMIT ?? "150");
   if (!Number.isInteger(dailyLimit) || dailyLimit < 1) {
     throw new Error("DAILY_LIMIT must be a positive integer");
   }

@@ -3,7 +3,7 @@ import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import type { APIGatewayProxyStructuredResultV2, LambdaFunctionURLEvent } from "aws-lambda";
 import { z } from "zod";
-import { AIRequestSchema, runAction, type CreateMessage } from "./ai";
+import { AgentRequestSchema, runAgentTurn, type CreateMessage } from "./agent";
 import {
   exchangeAuthorizationCode,
   revokeRefreshToken,
@@ -27,6 +27,8 @@ export interface Deps {
   revokeToken: (refreshToken: string, key: AppleSigningKey) => Promise<boolean>;
   createMessage: CreateMessage;
   now: () => Date;
+  /** Local development only: enables `POST /v1/auth/dev`, which signs in without Apple. Never set in AWS. */
+  allowDevAuth?: boolean;
 }
 
 type Result = APIGatewayProxyStructuredResultV2;
@@ -60,6 +62,11 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   return result.data;
 }
 
+/** Lambda function URLs accept up to 6 MB; leave headroom and give a clear error. */
+const MAX_BODY_BYTES = 5_500_000;
+
+const DevSignInSchema = z.object({ name: z.string().regex(/^[a-z0-9-]{1,32}$/).default("local") });
+
 const SignInSchema = z.object({
   identityToken: z.string().min(1).max(10_000),
   authorizationCode: z.string().max(1000).optional(),
@@ -70,6 +77,10 @@ function modelFailure(error: unknown): AppError {
   if (error instanceof AppError) return error;
   if (error instanceof Anthropic.RateLimitError) {
     return new AppError(503, "busy", "The AI is busy right now. Please try again in a minute.");
+  }
+  if (error instanceof Anthropic.BadRequestError) {
+    console.error(JSON.stringify({ msg: "model_bad_request", requestId: error.requestID }));
+    return new AppError(400, "conversation_invalid", "This conversation can't be continued. Please start a new chat.");
   }
   if (error instanceof Anthropic.APIConnectionError) {
     return new AppError(503, "unavailable", "Couldn't reach the AI service. Please try again.");
@@ -111,24 +122,36 @@ export function createHandler(deps: Deps) {
     return json(200, { userId, usage: { used, limit: deps.config.dailyLimit } });
   }
 
-  async function runAI(event: LambdaFunctionURLEvent): Promise<Result> {
+  async function devSignIn(event: LambdaFunctionURLEvent): Promise<Result> {
+    const { name } = parse(DevSignInSchema, readBody(event));
+    const userId = `dev-${name}`;
+    const now = deps.now();
+    await deps.store.upsertUser(userId, {}, now);
+    const session = await issueSession(userId, await deps.sessionKey(), now);
+    return json(200, { sessionToken: session.token, expiresAt: session.expiresAt, userId });
+  }
+
+  async function runAgent(event: LambdaFunctionURLEvent): Promise<Result> {
     const userId = await requireUser(event);
-    const request = parse(AIRequestSchema, readBody(event));
+    if ((event.body?.length ?? 0) > MAX_BODY_BYTES) {
+      throw new AppError(413, "conversation_too_long", "This conversation is too long. Please start a new chat.");
+    }
+    const request = parse(AgentRequestSchema, readBody(event));
     const day = utcDay(deps.now());
     const quota = await deps.store.consumeQuota(userId, day, deps.config.dailyLimit);
     if (!quota.allowed) {
-      throw new AppError(429, "quota_exceeded", `You've used all ${deps.config.dailyLimit} AI actions for today.`);
+      throw new AppError(429, "quota_exceeded", `You've reached today's limit of ${deps.config.dailyLimit} assistant steps.`);
     }
     const started = Date.now();
     try {
-      const result = await runAction(request, deps.config, deps.createMessage);
-      console.log(JSON.stringify({ msg: "ai_ok", action: request.action, ms: Date.now() - started }));
-      return json(200, { action: request.action, result, usage: { used: quota.used, limit: deps.config.dailyLimit } });
+      const reply = await runAgentTurn(request, deps.config, deps.createMessage);
+      console.log(JSON.stringify({ msg: "agent_ok", stop: reply.stopReason, ms: Date.now() - started }));
+      return json(200, { ...reply, usage: { used: quota.used, limit: deps.config.dailyLimit } });
     } catch (error) {
       const appError = modelFailure(error);
-      console.warn(JSON.stringify({ msg: "ai_failed", action: request.action, code: appError.code }));
-      // Don't charge the person for our failures; a refusal still counts.
-      if (appError.code !== "refused") await deps.store.refundQuota(userId, day);
+      console.warn(JSON.stringify({ msg: "agent_failed", code: appError.code }));
+      // Don't charge the person for failures on our side.
+      await deps.store.refundQuota(userId, day);
       throw appError;
     }
   }
@@ -155,8 +178,11 @@ export function createHandler(deps: Deps) {
           return await signIn(event);
         case "GET /v1/me":
           return await me(event);
-        case "POST /v1/ai":
-          return await runAI(event);
+        case "POST /v1/agent":
+          return await runAgent(event);
+        case "POST /v1/auth/dev":
+          if (!deps.allowDevAuth) return failure(new AppError(404, "not_found", "No such endpoint."));
+          return await devSignIn(event);
         case "DELETE /v1/account":
           return await deleteAccount(event);
         default:

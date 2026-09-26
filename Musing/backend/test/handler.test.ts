@@ -5,36 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config";
 import { AppError } from "../src/errors";
 import { createHandler, type Deps } from "../src/handler";
-import type { UserRecord, UserStore } from "../src/store";
-
-class MemoryStore implements UserStore {
-  users = new Map<string, UserRecord>();
-  usage = new Map<string, number>();
-  async upsertUser(userId: string, fields: UserRecord) {
-    this.users.set(userId, { ...this.users.get(userId), ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v)) });
-  }
-  async getUser(userId: string) {
-    return this.users.get(userId);
-  }
-  async consumeQuota(userId: string, day: string, limit: number) {
-    const key = `${userId}/${day}`;
-    const used = this.usage.get(key) ?? 0;
-    if (used >= limit) return { allowed: false, used };
-    this.usage.set(key, used + 1);
-    return { allowed: true, used: used + 1 };
-  }
-  async refundQuota(userId: string, day: string) {
-    const key = `${userId}/${day}`;
-    this.usage.set(key, Math.max(0, (this.usage.get(key) ?? 0) - 1));
-  }
-  async getUsage(userId: string, day: string) {
-    return this.usage.get(`${userId}/${day}`) ?? 0;
-  }
-  async deleteUser(userId: string) {
-    this.users.delete(userId);
-    for (const key of this.usage.keys()) if (key.startsWith(`${userId}/`)) this.usage.delete(key);
-  }
-}
+import { MemoryUserStore } from "../src/memory-store";
 
 const config: Config = {
   tableName: "t",
@@ -46,15 +17,8 @@ const config: Config = {
   effort: "medium",
 };
 
-const toolReply = (input: unknown, stop_reason = "tool_use") =>
-  ({
-    id: "msg",
-    type: "message",
-    role: "assistant",
-    model: config.modelId,
-    stop_reason,
-    content: stop_reason === "refusal" ? [] : [{ type: "tool_use", id: "t", name: "respond", input }],
-  }) as unknown as BetaMessage;
+const reply = (stop_reason: string, content: unknown[] = [{ type: "text", text: "Done!" }]) =>
+  ({ id: "msg", type: "message", role: "assistant", model: config.modelId, stop_reason, content }) as unknown as BetaMessage;
 
 function event(method: string, path: string, body?: unknown, token?: string): LambdaFunctionURLEvent {
   return {
@@ -66,23 +30,25 @@ function event(method: string, path: string, body?: unknown, token?: string): La
   } as unknown as LambdaFunctionURLEvent;
 }
 
-const summarize = {
-  action: "summarize",
-  board: { title: "Ideas", cards: [{ id: "card-1", kind: "text", text: "Launch in May" }] },
+const turn = {
+  tools: ["calendar_list_events"],
+  messages: [{ role: "user", content: [{ type: "text", text: "What's on my calendar today?" }] }],
 };
 
-let store: MemoryStore;
+let store: MemoryUserStore;
 let deps: Deps;
 let handler: ReturnType<typeof createHandler>;
+
+const body = (result: { body?: string }) => JSON.parse(String(result.body));
 
 async function signIn(): Promise<string> {
   const response = await handler(event("POST", "/v1/auth/apple", { identityToken: "apple-token", authorizationCode: "code" }));
   expect(response.statusCode).toBe(200);
-  return JSON.parse(String(response.body)).sessionToken;
+  return body(response).sessionToken;
 }
 
 beforeEach(() => {
-  store = new MemoryStore();
+  store = new MemoryUserStore();
   deps = {
     config,
     store,
@@ -94,7 +60,7 @@ beforeEach(() => {
     appleKey: async () => ({ teamId: "T", keyId: "K", privateKey: "P" }),
     exchangeCode: vi.fn(async () => "apple-refresh"),
     revokeToken: vi.fn(async () => true),
-    createMessage: vi.fn(async () => toolReply({ title: "Launch", summary: "Ship in May." })),
+    createMessage: vi.fn(async () => reply("end_turn")),
     now: () => new Date("2026-09-26T12:00:00Z"),
   };
   handler = createHandler(deps);
@@ -107,68 +73,80 @@ describe("handler", () => {
   });
 
   it("signs in with Apple and stores the refresh token for later revocation", async () => {
-    const token = await signIn();
-    expect(token).toBeTruthy();
+    expect(await signIn()).toBeTruthy();
     expect(store.users.get("apple-user-1")).toEqual({ appleRefreshToken: "apple-refresh" });
-    const bad = await handler(event("POST", "/v1/auth/apple", { identityToken: "forged" }));
-    expect(bad.statusCode).toBe(401);
+    expect((await handler(event("POST", "/v1/auth/apple", { identityToken: "forged" }))).statusCode).toBe(401);
   });
 
-  it("requires a session for AI and account routes", async () => {
-    for (const [method, path] of [["POST", "/v1/ai"], ["GET", "/v1/me"], ["DELETE", "/v1/account"]] as const) {
-      const response = await handler(event(method, path, summarize, "garbage"));
-      expect(response.statusCode).toBe(401);
+  it("keeps developer sign-in off unless explicitly allowed", async () => {
+    expect((await handler(event("POST", "/v1/auth/dev", {}))).statusCode).toBe(404);
+    const dev = createHandler({ ...deps, allowDevAuth: true });
+    const response = await dev(event("POST", "/v1/auth/dev", { name: "sim" }));
+    expect(response.statusCode).toBe(200);
+    expect(body(response).userId).toBe("dev-sim");
+    expect((await dev(event("POST", "/v1/agent", turn, body(response).sessionToken))).statusCode).toBe(200);
+  });
+
+  it("requires a session for agent and account routes", async () => {
+    for (const [method, path] of [["POST", "/v1/agent"], ["GET", "/v1/me"], ["DELETE", "/v1/account"]] as const) {
+      expect((await handler(event(method, path, turn, "garbage"))).statusCode).toBe(401);
     }
   });
 
-  it("runs an AI action and counts usage", async () => {
+  it("runs an agent turn, returning Claude's blocks and usage", async () => {
+    vi.mocked(deps.createMessage).mockResolvedValueOnce(
+      reply("tool_use", [{ type: "tool_use", id: "tu_1", name: "calendar_list_events", input: { start: "a", end: "b" } }]),
+    );
     const token = await signIn();
-    const response = await handler(event("POST", "/v1/ai", summarize, token));
+    const response = await handler(event("POST", "/v1/agent", turn, token));
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(String(response.body))).toEqual({
-      action: "summarize",
-      result: { title: "Launch", summary: "Ship in May." },
+    expect(body(response)).toEqual({
+      content: [{ type: "tool_use", id: "tu_1", name: "calendar_list_events", input: { start: "a", end: "b" } }],
+      stopReason: "tool_use",
       usage: { used: 1, limit: 2 },
     });
-    const me = JSON.parse(String((await handler(event("GET", "/v1/me", undefined, token))).body));
-    expect(me.usage).toEqual({ used: 1, limit: 2 });
+    const params = vi.mocked(deps.createMessage).mock.calls[0]![0];
+    expect(params.tools).toHaveLength(1);
   });
 
   it("enforces the daily limit", async () => {
     const token = await signIn();
-    await handler(event("POST", "/v1/ai", summarize, token));
-    await handler(event("POST", "/v1/ai", summarize, token));
-    const third = await handler(event("POST", "/v1/ai", summarize, token));
+    await handler(event("POST", "/v1/agent", turn, token));
+    await handler(event("POST", "/v1/agent", turn, token));
+    const third = await handler(event("POST", "/v1/agent", turn, token));
     expect(third.statusCode).toBe(429);
-    expect(JSON.parse(String(third.body)).error.code).toBe("quota_exceeded");
+    expect(body(third).error.code).toBe("quota_exceeded");
     expect(deps.createMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("refunds usage when the model fails, but not when it refuses", async () => {
+  it("passes refusals through (counted) and refunds model failures", async () => {
     const token = await signIn();
-    vi.mocked(deps.createMessage).mockRejectedValueOnce(
-      new Anthropic.RateLimitError(429, undefined, "slow down", new Headers()),
-    );
-    const busy = await handler(event("POST", "/v1/ai", summarize, token));
-    expect(busy.statusCode).toBe(503);
-    expect(await store.getUsage("apple-user-1", "2026-09-26")).toBe(0);
+    vi.mocked(deps.createMessage).mockResolvedValueOnce(reply("refusal", []));
+    const refused = await handler(event("POST", "/v1/agent", turn, token));
+    expect(refused.statusCode).toBe(200);
+    expect(body(refused).stopReason).toBe("refusal");
+    expect(await store.getUsage("apple-user-1", "2026-09-26")).toBe(1);
 
-    vi.mocked(deps.createMessage).mockResolvedValueOnce(toolReply(undefined, "refusal"));
-    const refused = await handler(event("POST", "/v1/ai", summarize, token));
-    expect(refused.statusCode).toBe(422);
+    vi.mocked(deps.createMessage).mockRejectedValueOnce(new Anthropic.RateLimitError(429, undefined, "slow", new Headers()));
+    expect((await handler(event("POST", "/v1/agent", turn, token))).statusCode).toBe(503);
+    vi.mocked(deps.createMessage).mockRejectedValueOnce(new Anthropic.BadRequestError(400, undefined, "bad", new Headers()));
+    const invalid = await handler(event("POST", "/v1/agent", turn, token));
+    expect(invalid.statusCode).toBe(400);
+    expect(body(invalid).error.code).toBe("conversation_invalid");
     expect(await store.getUsage("apple-user-1", "2026-09-26")).toBe(1);
   });
 
   it("rejects invalid requests without spending quota", async () => {
     const token = await signIn();
-    expect((await handler(event("POST", "/v1/ai", "{not json", token))).statusCode).toBe(400);
-    expect((await handler(event("POST", "/v1/ai", { action: "ask", board: summarize.board }, token))).statusCode).toBe(400);
+    expect((await handler(event("POST", "/v1/agent", "{not json", token))).statusCode).toBe(400);
+    expect((await handler(event("POST", "/v1/agent", { messages: [] }, token))).statusCode).toBe(400);
+    expect((await handler(event("POST", "/v1/agent", "x".repeat(5_600_000), token))).statusCode).toBe(413);
     expect(await store.getUsage("apple-user-1", "2026-09-26")).toBe(0);
   });
 
   it("deletes the account and revokes the Apple grant", async () => {
     const token = await signIn();
-    await handler(event("POST", "/v1/ai", summarize, token));
+    await handler(event("POST", "/v1/agent", turn, token));
     const response = await handler(event("DELETE", "/v1/account", undefined, token));
     expect(response.statusCode).toBe(204);
     expect(deps.revokeToken).toHaveBeenCalledWith("apple-refresh", expect.anything());

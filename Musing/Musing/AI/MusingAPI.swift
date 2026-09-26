@@ -1,84 +1,37 @@
 import Foundation
 
-// MARK: - Wire types (mirror `Musing/backend/src/ai.ts`)
-
-enum AIAction: String, Encodable {
-    case summarize, organize, expand, handwriting, ask
-    case photoNotes = "photo_notes"
-
-    var progressLabel: String {
-        switch self {
-        case .summarize: "Summarizing board…"
-        case .organize: "Organizing board…"
-        case .expand: "Expanding idea…"
-        case .handwriting: "Reading handwriting…"
-        case .photoNotes: "Reading photo…"
-        case .ask: "Thinking…"
-        }
-    }
-}
-
-struct AIRequest: Encodable {
-    struct CardPayload: Encodable {
-        let id: String
-        let kind: String
-        var text: String?
-        var url: String?
-        var linkTitle: String?
-        var childTitle: String?
-    }
-
-    struct BoardPayload: Encodable {
-        let title: String
-        let cards: [CardPayload]
-    }
-
-    struct ImagePayload: Encodable {
-        let mediaType: String
-        let data: String
-    }
-
-    let action: AIAction
-    let board: BoardPayload
-    var focusCardId: String?
-    var question: String?
-    var image: ImagePayload?
-}
-
-struct AIResult: Decodable {
-    struct Group: Decodable {
-        let title: String
-        let cardIds: [String]
-    }
-
-    var title: String?
-    var summary: String?
-    var groups: [Group]?
-    var ideas: [String]?
-    var text: String?
-    var notes: [String]?
-    var answer: String?
-}
-
 struct AIUsage: Decodable, Equatable {
     let used: Int
     let limit: Int
+}
+
+/// One message on the wire: role + Claude content blocks.
+struct WireMessage: Encodable {
+    let role: String
+    let content: [JSONValue]
+}
+
+struct AgentReply: Decodable {
+    let content: [JSONValue]
+    let stopReason: String?
+    let usage: AIUsage
 }
 
 enum APIError: LocalizedError {
     case notConfigured
     case unauthorized
     case quotaExceeded(String)
+    case conversationInvalid(String)
     case server(code: String, message: String)
     case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            "AI isn't set up yet. Deploy the backend and paste its URL into AIConfig.swift."
+            "The assistant isn't connected to a server yet. Deploy the backend and paste its URL into AIConfig.swift."
         case .unauthorized:
             "Please sign in again."
-        case .quotaExceeded(let message):
+        case .quotaExceeded(let message), .conversationInvalid(let message):
             message
         case .server(_, let message):
             message
@@ -87,8 +40,6 @@ enum APIError: LocalizedError {
         }
     }
 }
-
-// MARK: - Client
 
 /// Talks to the Musing backend (a Lambda function URL in front of Claude on Amazon Bedrock).
 struct MusingAPI {
@@ -106,11 +57,6 @@ struct MusingAPI {
         let usage: AIUsage
     }
 
-    struct AIResponse: Decodable {
-        let result: AIResult
-        let usage: AIUsage
-    }
-
     private struct ErrorBody: Decodable {
         struct Detail: Decodable {
             let code: String
@@ -124,17 +70,28 @@ struct MusingAPI {
         let authorizationCode: String?
     }
 
+    private struct AgentBody: Encodable {
+        let messages: [WireMessage]
+        let tools: [String]
+    }
+
     func signIn(identityToken: String, authorizationCode: String?) async throws -> SignInResponse {
         let body = try JSONEncoder().encode(SignInBody(identityToken: identityToken, authorizationCode: authorizationCode))
         return try decode(await send("POST", "v1/auth/apple", body: body))
+    }
+
+    /// Local dev server only.
+    func devSignIn() async throws -> SignInResponse {
+        try decode(await send("POST", "v1/auth/dev", body: Data("{}".utf8)))
     }
 
     func me(token: String) async throws -> MeResponse {
         try decode(await send("GET", "v1/me", token: token))
     }
 
-    func run(_ request: AIRequest, token: String) async throws -> AIResponse {
-        try decode(await send("POST", "v1/ai", body: try JSONEncoder().encode(request), token: token))
+    func agentTurn(messages: [WireMessage], tools: [String], token: String) async throws -> AgentReply {
+        let body = try JSONEncoder().encode(AgentBody(messages: messages, tools: tools))
+        return try decode(await send("POST", "v1/agent", body: body, token: token))
     }
 
     func deleteAccount(token: String) async throws {
@@ -152,7 +109,7 @@ struct MusingAPI {
     private func send(_ method: String, _ path: String, body: Data? = nil, token: String? = nil) async throws -> Data {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
-        // Claude can take a while on bigger boards; the backend allows up to two minutes.
+        // A step with thinking can take a while; the backend allows up to two minutes.
         request.timeoutInterval = 150
         if let body {
             request.httpBody = body
@@ -165,14 +122,13 @@ struct MusingAPI {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let detail = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error
-            if http.statusCode == 401 { throw APIError.unauthorized }
-            if detail?.code == "quota_exceeded" {
-                throw APIError.quotaExceeded(detail?.message ?? "You've reached today's AI limit.")
+            let message = detail?.message ?? "The server returned an error (\(http.statusCode))."
+            switch (http.statusCode, detail?.code ?? "") {
+            case (401, _): throw APIError.unauthorized
+            case (_, "quota_exceeded"): throw APIError.quotaExceeded(message)
+            case (_, "conversation_invalid"), (_, "conversation_too_long"): throw APIError.conversationInvalid(message)
+            default: throw APIError.server(code: detail?.code ?? "http_\(http.statusCode)", message: message)
             }
-            throw APIError.server(
-                code: detail?.code ?? "http_\(http.statusCode)",
-                message: detail?.message ?? "The server returned an error (\(http.statusCode))."
-            )
         }
         return data
     }

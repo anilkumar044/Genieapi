@@ -1,95 +1,103 @@
-# Musing — a Muse-style thinking canvas for iPhone
+# Musing: a personal AI agent for iPhone
 
-Musing is a native SwiftUI app inspired by [Muse](https://museapp.com): an infinite, zoomable
-canvas where you spread out notes, sketches, photos and links, and nest boards inside boards.
+Musing is a SwiftUI app modeled on Meta's **Muse**. You tell it what you need in a chat, and it gets it done with
+the apps on your iPhone. It always asks before taking an action.
 
-## Features
+- *“What's on my calendar tomorrow?”*: checks your calendar.
+- *“Find a time for lunch with Sam next week and put it on my calendar”*: looks for free slots, then asks
+  before adding the event.
+- *“Remind me to call Mom at 6pm”*: adds a reminder after you approve.
+- *“Email Priya that I'm running late”*: finds Priya in Contacts and opens a draft for you to review and send.
+- *“Remember that I prefer morning meetings”*: saves a memory it uses in future chats.
 
-- **Infinite canvas** — pinch to zoom (10%–600%), drag the background to pan. Each board remembers where you left it.
-- **Nested boards** — add a board card, tap it to zoom into it (iOS 18 zoom transition), rename it from the title bar. Boards can go as deep as you like.
-- **File by dragging** — drag any card onto a board card to move it inside; use *Move to Parent Board* to bring it back out.
-- **Cards**
-  - **Notes**: double-tap empty space (or tap *Note*). Tap once to select, tap again to edit.
-  - **Ink**: freehand sketches with PencilKit (finger or Apple Pencil), with the full tool picker, undo/redo.
-  - **Photos**: from your library via the system photo picker (no permission prompt needed).
-  - **Links**: typed or pasted; the page title is fetched automatically. Tap a selected link to open it.
-  - **Paste**: images, URLs or text from the clipboard become the right kind of card.
-- **Arrange** — drag to move, drag the corner dot to resize (photos keep their aspect ratio), long-press to select, recolor, duplicate (deep-copies nested boards), delete.
-- **Offline & private** — boards are stored locally in the app's Documents folder (`library.json` + `Images/`).
-- **AI actions (optional, runs on AWS)** — powered by Claude on Amazon Bedrock through the backend in [`backend/`](backend/README.md):
-  - ✨ menu on any board: **Summarize Board**, **Organize Board** (groups cards into titled columns, with Undo), **Ask About Board**
-  - ✨ on a selected card: **Expand with AI** (notes), **Read Handwriting** (sketches), **Photo to Notes** (photos)
-  - Results arrive as new cards on the canvas. The AI runs on AWS, not on the phone, and only the current board is sent,
-    only when you tap an action.
+## How it works
 
-## Requirements
+```
+iPhone app (chat, approvals, on-device tools)  ──►  Musing backend on AWS  ──►  Claude on Amazon Bedrock
+```
 
-- A Mac with **Xcode 16** or newer
-- An iPhone (or iPad) on **iOS 18** or newer
-- An **Apple Developer Program** membership. The app uses Sign in with Apple for its AI features, and that
-  capability isn't available to free Apple IDs. (To try the app on a free Apple ID without AI, delete
-  `Musing.entitlements` and the `CODE_SIGN_ENTITLEMENTS` build setting.)
-- For AI features: an AWS account with Amazon Bedrock. See [`backend/README.md`](backend/README.md)
+- **The thinking happens in the cloud.** Claude runs on Amazon Bedrock behind the backend in [`backend/`](backend/README.md).
+  The phone never holds AWS credentials.
+- **The actions happen on your phone.** Calendar, Reminders and Contacts are read and changed through iOS's own
+  frameworks, with iOS permission prompts. Claude asks for a tool; the app runs it and sends back the result.
+- **You stay in control.**
+  - Reads (checking your calendar, reminders or contacts) run automatically.
+  - Every action shows an approval card first: adding or completing things, opening links, drafting messages.
+  - Emails and texts open in the system composer, and you press Send yourself.
+- **Connectors** (Settings): turn each one Off, **Read only**, or **Read & act**.
+- **Private by default.** Chats and memories are stored only on the iPhone. The server stores only your account
+  and a daily usage count.
 
-## Run it on your iPhone
+## Test it on your Mac (no Apple Developer account or AWS deployment needed)
 
-1. Open `Musing/Musing.xcodeproj` in Xcode.
-2. Select the **Musing** target → **Signing & Capabilities** → choose your **Team** (add your Apple ID under
-   *Xcode → Settings → Accounts* if needed). If Xcode complains the bundle ID is taken, change
-   `com.example.musing` to something unique like `com.yourname.musing`.
-3. Plug in your iPhone (or pair it over Wi-Fi), select it as the run destination, and press **⌘R**.
-4. First time only: on the iPhone, enable **Settings → Privacy & Security → Developer Mode**, and trust your
-   developer certificate under **Settings → General → VPN & Device Management**.
+You need Xcode 16+, Node.js 22+, and **either** AWS credentials with Amazon Bedrock access **or** a Claude API key.
 
-You can also press ⌘R with an iPhone simulator selected to try it without a device. To test Sign in with Apple
-there, sign in to an Apple ID in the simulator's Settings app.
+1. **Start the local server** in Terminal:
+   ```bash
+   cd Musing/backend
+   npm install
+   npm run dev                          # uses your AWS login (aws configure / aws sso login)
+   # or: ANTHROPIC_API_KEY=sk-ant-... npm run dev   (uses the Claude API directly)
+   ```
+   Leave it running. It prints `Musing dev server on http://localhost:8787`.
+2. **Run the app**: open `Musing/Musing.xcodeproj`, choose an **iPhone 16** simulator, and press **⌘R**.
+   Debug builds connect to `http://localhost:8787` automatically.
+3. Send a message, tap **Agree and Continue**, then **Developer Sign-In (local server)**.
+4. Try the suggestions. The Simulator has its own Calendar, Reminders and Contacts apps, so add a few
+   events or contacts there to give Musing something to find.
 
-### Turn on AI features
+Debug builds leave out the Sign in with Apple entitlement, so they sign with a free Apple ID (Personal Team).
+To run on a **physical iPhone** against the dev server, set `localDevURLString` in `Musing/AI/AIConfig.swift`
+to your Mac's address, e.g. `http://Your-Mac.local:8787/`, and make sure the phone and Mac are on the same Wi-Fi.
 
-1. Deploy the backend: follow [`backend/README.md`](backend/README.md) (`npx cdk deploy -c bundleId=<your bundle ID>`).
-2. Paste the `ApiUrl` output into `Musing/AI/AIConfig.swift`.
-3. Run the app and tap ✨. The first time, Musing explains what gets shared, asks permission, and asks you to
-   Sign in with Apple.
+## Going live
 
-### App Store readiness (already handled)
+1. Join the **Apple Developer Program**. Sign in with Apple needs it, and so does the App Store.
+2. Deploy the backend to AWS: see [`backend/README.md`](backend/README.md).
+3. Paste the deployed `ApiUrl` into `deployedURLString` in `Musing/AI/AIConfig.swift`.
+4. In Xcode, set your Team and a unique bundle ID (the same one you deployed with). Release builds include Sign in with Apple.
+   To test Sign in with Apple in a Debug build, add the capability under **Signing & Capabilities**.
 
-- **Consent before sharing** (guideline 5.1.2): the setup screen says exactly what is sent and to whom
-  (Anthropic's Claude on Amazon Bedrock), and nothing is sent without permission. The permission can be turned
-  off in **✨ → AI Account**.
-- **Account deletion** (5.1.1(v)): **AI Account → Delete Account** removes the server-side account and revokes Sign in with Apple.
-- **Privacy manifest**: `PrivacyInfo.xcprivacy` declares the user ID and the content sent for app functionality.
-  Match these in App Store Connect's privacy labels.
+### App Store notes
+
+- **Name:** “Muse” is Meta's app. Keep your App Store name, icon and description clearly your own (guideline 4.1)
+  and don't mention Muse or Meta in the listing.
+- **Already handled in the app:**
+  - A consent screen before anything is shared with the AI (5.1.2).
+  - In-app account deletion that also revokes Sign in with Apple (5.1.1(v)).
+  - A privacy manifest (`Musing/PrivacyInfo.xcprivacy`).
+  - Permission prompts for Calendar, Reminders and Contacts (`Info.plist`).
+  - No-encryption export flag (`ITSAppUsesNonExemptEncryption`).
+- **In App Store Connect**, declare the data types from the privacy manifest: user ID, user content, and contacts, all
+  used for app functionality. Reviewers will need a way in: give them a test account, or make sure Sign in with
+  Apple works on your live backend.
 
 ## Project layout
 
 ```
 Musing/
 ├── Musing.xcodeproj
-└── Musing/
-    ├── MusingApp.swift          App entry point, saves when backgrounded
-    ├── AI/AIConfig.swift        Backend URL (paste after deploying)
-    ├── AI/MusingAPI.swift       HTTP client + request/result types for the backend
-    ├── AI/AccountStore.swift    Sign in with Apple session, consent, usage
-    ├── AI/BoardAIController.swift  Builds AI requests from a board and turns results into cards
-    ├── Views/AIViews.swift      AI setup (consent + sign-in) and AI Account screens
-    ├── Model/Models.swift       Card, Board, Viewport, Library (Codable)
-    ├── Store/BoardStore.swift   Observable store: CRUD, move/duplicate, persistence, image & ink caches
-    ├── Views/RootView.swift     NavigationStack of boards with zoom transitions
-    ├── Views/BoardScreen.swift  The canvas: pan/zoom, selection, drag-to-file, toolbars
-    ├── Views/CardView.swift     Card rendering (note, ink, photo, link, board) + gestures
-    ├── Views/InkEditor.swift    PencilKit sketchpad
-    ├── Assets.xcassets          App icon and accent color
-    ├── Musing.entitlements      Sign in with Apple
-    └── PrivacyInfo.xcprivacy    Privacy manifest
-backend/                         AWS CDK app: Lambda + DynamoDB + Claude on Amazon Bedrock
+├── Info.plist                    Permission descriptions, local-network access for the dev server
+├── Musing/
+│   ├── MusingApp.swift
+│   ├── Agent/
+│   │   ├── AgentController.swift The agent loop: call Claude → run tools → approvals → continue
+│   │   ├── DeviceTools.swift     Calendar, Reminders, Contacts, email/text drafts, links (EventKit, Contacts, MessageUI)
+│   │   ├── Connectors.swift      Connectors, access levels, tool catalog
+│   │   ├── Conversation.swift    Chat storage (on device), tool outcomes
+│   │   ├── MemoryStore.swift     Saved memories (on device)
+│   │   └── JSONValue.swift       Keeps Claude's content blocks byte-for-byte for replay
+│   ├── AI/                       Backend client, Sign in with Apple account, config, Keychain
+│   ├── Views/                    Chat, approval cards, settings/connectors, history, setup
+│   ├── Musing.entitlements       Sign in with Apple (Release builds)
+│   └── PrivacyInfo.xcprivacy
+└── backend/                      AWS CDK app: Lambda + DynamoDB + Claude on Amazon Bedrock, and the local dev server
 ```
 
-The Xcode project uses folder-synchronized groups, so any Swift file you add under `Musing/Musing/`
-is picked up automatically.
+## Not in this version yet
 
-## Ideas for next steps
-
-- iCloud sync (swap the JSON file for SwiftData + CloudKit)
-- Share extension to send links/photos from Safari and Photos straight into an inbox board
-- Freehand ink directly on the board, connecting lines/arrows between cards
-- PDF cards and search across all boards
+- **Gmail and Google Calendar connectors.** These need Google Cloud OAuth and Google's app verification. Gmail's
+  restricted scopes also need a paid security assessment before a public launch.
+- **Tasks that keep running after you close the app.** The tools run on the phone, so the agent works while the app
+  is open. Background work would need server-side connectors and push notifications.
+- **Web browsing and search.** Musing suggests links instead.
