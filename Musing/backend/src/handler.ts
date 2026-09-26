@@ -86,7 +86,7 @@ function modelFailure(error: unknown): AppError {
     return new AppError(503, "unavailable", "Couldn't reach the AI service. Please try again.");
   }
   if (error instanceof Anthropic.APIError) {
-    console.error(JSON.stringify({ msg: "model_error", status: error.status, requestId: error.requestID }));
+    console.error(JSON.stringify({ msg: "model_error", status: error.status, requestId: error.requestID, detail: error.message }));
     return new AppError(502, "model_error", "The AI service returned an error. Please try again.");
   }
   console.error(JSON.stringify({ msg: "unexpected_error", error: String(error) }));

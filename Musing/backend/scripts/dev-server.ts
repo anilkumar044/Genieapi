@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import Anthropic, { BetaFallbackState, betaRefusalFallbackMiddleware } from "@anthropic-ai/sdk";
 import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
+import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import type { LambdaFunctionURLEvent } from "aws-lambda";
 import { verifyAppleIdentityToken } from "../src/apple";
 import type { Config, Effort } from "../src/config";
@@ -39,6 +40,26 @@ const client = useClaudeAPI
   ? new Anthropic({ middleware })
   : new AnthropicBedrockMantle({ awsRegion: config.bedrockRegion, middleware });
 
+const CLAUDE_API_HINT = "⚠️  The Claude API rejected ANTHROPIC_API_KEY. Check the key at platform.claude.com.";
+function bedrockHint(status: number): string {
+  return status === 401
+    ? "⚠️  Bedrock didn't accept your AWS credentials. Run `aws sts get-caller-identity` to check your login, then restart `npm run dev`."
+    : `⚠️  Your AWS identity isn't allowed to use ${config.modelId}. It needs the IAM permission bedrock-mantle:CreateInference, and the model must be enabled in the Bedrock console (Model access) in ${config.bedrockRegion}. Or try MODEL_ID=anthropic.claude-opus-4-8.`;
+}
+
+// Check the AWS login up front so a missing one is obvious.
+if (!useClaudeAPI) {
+  try {
+    const credentials = await defaultProvider()();
+    console.log(`AWS credentials found (access key …${credentials.accessKeyId.slice(-4)}).`);
+  } catch {
+    console.warn(
+      "⚠️  No AWS credentials found. Run `aws configure` (or `aws sso login`) and restart,\n" +
+        "   or use the Claude API instead: ANTHROPIC_API_KEY=sk-ant-... npm run dev",
+    );
+  }
+}
+
 const sessionKey = randomBytes(32);
 const handler = createHandler({
   config,
@@ -48,7 +69,16 @@ const handler = createHandler({
   appleKey: async () => undefined,
   exchangeCode: async () => undefined,
   revokeToken: async () => true,
-  createMessage: (params) => client.beta.messages.create(params, { fallbackState: new BetaFallbackState() }),
+  createMessage: async (params) => {
+    try {
+      return await client.beta.messages.create(params, { fallbackState: new BetaFallbackState() });
+    } catch (error) {
+      if (error instanceof Anthropic.APIError && (error.status === 401 || error.status === 403)) {
+        console.warn(useClaudeAPI ? CLAUDE_API_HINT : bedrockHint(error.status));
+      }
+      throw error;
+    }
+  },
   now: () => new Date(),
   allowDevAuth: true,
 });
